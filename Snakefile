@@ -50,6 +50,8 @@ rule all:
         - qc_fastqc
     And Host Filtering:
         - host_filter_pe
+    And Bloom Filtering:
+        - bloom_filter_pe    
     And HUMANn2:
         - metaphlan2_sample_pe
         - combine_metaphlan
@@ -106,6 +108,16 @@ rule all:
                 sample = SAMPLES_SE,
                 run = RUN,
                 end = "SE".split()),
+        expand( # host-filtered fastqs
+                "data/{sample}/{run}/bloom_filtered/{sample}_{end}.trimmed.bloom_filtered.fq.gz",
+                sample = SAMPLES_PE,
+                run = RUN,
+                end = "R1 R2 U1 U2".split()) +
+        expand( # filtered fastqs
+                "data/{sample}/{run}/bloom_filtered/{sample}_{end}.trimmed.bloom_filtered.fq.gz",
+                sample = SAMPLES_SE,
+                run = RUN,
+                end = "SE".split()),        
         expand( # HUMANn2 on each sample
                "data/{sample}/{run}/humann2/{sample}_genefamilies_{norm}.biom",
                norm = config['PARAMS']['HUMANN2']['NORMS'],
@@ -134,6 +146,8 @@ rule basic_qc:
         - qc_fastqc
     And Host Filtering:
         - host_filter_pe
+    And Bloom Filtering
+        - bloom_filter_pe
     """
     input:
         expand( # fastqc zip and html for raw PE data
@@ -182,7 +196,7 @@ rule basic_qc:
                 "data/{sample}/{run}/host_filtered/{sample}_{end}.trimmed.host_filtered.fq.gz",
                 sample = SAMPLES_SE,
                 run = RUN,
-                end = "SE".split()),
+                end = "SE".split()),       
         expand( # MultiQC for just this run
             "data/multiQC/{run}/multiqc_report.html",
             run = RUN
@@ -205,7 +219,22 @@ rule host_filter:
                 sample = SAMPLES_SE,
                 run = RUN,
                 end = "SE".split())
-
+rule bloom_filter:
+    """
+    Rule to do bloom-filtering
+        - bloom_filter_pe
+    """
+    input:
+        expand( # filtered fastqs
+                "data/{sample}/{run}/host_filtered/{sample}_{end}.trimmed.host_filtered.fq.gz",
+                sample = SAMPLES_PE,
+                run = RUN,
+                end = "R1 R2 U1 U2".split()) +
+        expand( # filtered fastqs
+                "data/{sample}/{run}/host_filtered/{sample}_{end}.trimmed.host_filtered.fq.gz",
+                sample = SAMPLES_SE,
+                run = RUN,
+                end = "SE".split())
 rule humann2:
     """
     Rule to do Humann2
@@ -219,6 +248,16 @@ rule humann2:
     # params:
     #     norms = config['PARAMS']['HUMANN2']['NORMS']
     input:
+        expand( # host-filtered fastqs
+                "data/{sample}/{run}/bloom_filtered/{sample}_{end}.trimmed.bloom_filtered.fq.gz",
+                sample = SAMPLES_PE,
+                run = RUN,
+                end = "R1 R2 U1 U2".split()) +
+        expand( # filtered fastqs
+                "data/{sample}/{run}/bloom_filtered/{sample}_{end}.trimmed.bloom_filtered.fq.gz",
+                sample = SAMPLES_SE,
+                run = RUN,
+                end = "SE".split()),    
         expand(# filtered fastqs
                "data/{sample}/{run}/humann2/{sample}_genefamilies_{norm}.biom",
                norm = config['PARAMS']['HUMANN2']['NORMS'],
@@ -229,8 +268,6 @@ rule humann2:
                norm = config['PARAMS']['HUMANN2']['NORMS'],
                run = RUN,
                mapped=['all','mapped'])
-
-
 
 rule raw_fastqc:
     """
@@ -583,6 +620,68 @@ rule host_filter_pe:
                   """)
 
 
+rule bloom_filter_pe:
+    """
+    Performs bloom read filtering on paired end data using Bowtie and Samtools/
+    BEDtools. Takes the four output files generated after host filtering. 
+
+    Also requires an indexed reference (path specified in config). 
+
+    First, uses Bowtie output piped through Samtools to only retain read pairs
+    that are never mapped (either concordantly or just singly) to the indexed
+    reference genome. Fastqs from this are gzipped into matched forward and 
+    reverse pairs. 
+
+    Unpaired forward and reverse reads are simply run through Bowtie and
+    non-mapping gzipped reads output.
+
+    All piped output first written to localscratch to avoid tying up filesystem.
+    """
+    input:
+        forward  = "data/{sample}/{run}/host_filtered/{sample}_R1.trimmed.host_filtered.fq.gz",
+        reverse  = "data/{sample}/{run}/host_filtered/{sample}_R2.trimmed.host_filtered.fq.gz",
+        unpaired_1 = "data/{sample}/{run}/host_filtered/{sample}_U1.trimmed.host_filtered.fq.gz",
+        unpaired_2 = "data/{sample}/{run}/host_filtered/{sample}_U2.trimmed.host_filtered.fq.gz"
+    output:
+        forward  = "data/{sample}/{run}/bloom_filtered/{sample}_R1.trimmed.bloom_filtered.fq.gz",
+        reverse  = "data/{sample}/{run}/bloom_filtered/{sample}_R2.trimmed.bloom_filtered.fq.gz",
+        unpaired_1 = "data/{sample}/{run}/bloom_filtered/{sample}_U1.trimmed.bloom_filtered.fq.gz",
+        unpaired_2 = "data/{sample}/{run}/bloom_filtered/{sample}_U2.trimmed.bloom_filtered.fq.gz"
+    params:
+        forward_fn = "{sample}_R1.trimmed.bloom_filtered.fq",
+        reverse_fn = "{sample}_R2.trimmed.bloom_filtered.fq",
+        unpaired_1_fn = "{sample}_U1.trimmed.bloom_filtered.fq.gz",
+        unpaired_2_fn = "{sample}_U2.trimmed.bloom_filtered.fq.gz",
+        bloom_db = config["BLOOM_DB"]
+    threads:
+        12
+    benchmark:
+        "benchmarks/{run}/qc/bloom_filter_pe_{sample}.json"
+    log:
+        bowtie = "logs/{run}/bowtie/{sample}.log",
+        other = "logs/{run}/qc/bloom_filter_pe_{sample}.log" 
+    run:
+        with tempfile.TemporaryDirectory(dir=TMP_DIR_ROOT) as temp_dir:
+            shell("""
+                  set +u; {BOWTIE_ENV}; set -u
+
+                  bowtie2 -p {threads} -x {params.bloom_db} --very-sensitive -1 {input.forward} -2 {input.reverse} 2> {log.bowtie}| \
+                  samtools view -f 12 -F 256 2> {log.other}| \
+                  samtools sort -T {temp_dir} -@ {threads} -n 2> {log.other} | \
+                  samtools view -bS 2> {log.other} | \
+                  bedtools bamtofastq -i - -fq {temp_dir}/{params.forward_fn} -fq2 {temp_dir}/{params.reverse_fn} 2> {log.other}
+
+                  {gzip} -c {temp_dir}/{params.forward_fn} > {temp_dir}/{params.forward_fn}.gz
+                  {gzip} -c {temp_dir}/{params.reverse_fn} > {temp_dir}/{params.reverse_fn}.gz
+
+                  scp {temp_dir}/{params.forward_fn}.gz {output.forward}
+                  scp {temp_dir}/{params.reverse_fn}.gz {output.reverse} 
+
+                  bowtie2 -p {threads} -x {params.host_db} --very-sensitive -U {input.unpaired_1} --un-gz {temp_dir}/{params.unpaired_1_fn} -S /dev/null 2> {log.other}
+                  bowtie2 -p {threads} -x {params.host_db} --very-sensitive -U {input.unpaired_2} --un-gz {temp_dir}/{params.unpaired_2_fn} -S /dev/null 2> {log.other}
+                  scp {temp_dir}/{params.unpaired_1_fn} {output.unpaired_1}
+                  scp {temp_dir}/{params.unpaired_2_fn} {output.unpaired_2}
+                  """)
 
 rule host_filter_se:
     """
@@ -631,8 +730,8 @@ rule metaphlan2_sample_pe:
     processing and naming, still will need to make a separate rule for PE. 
     """
     input:
-        paired_f  = "data/{sample}/{run}/host_filtered/{sample}_R1.trimmed.host_filtered.fq.gz",
-        unpaired_f = "data/{sample}/{run}/host_filtered/{sample}_U1.trimmed.host_filtered.fq.gz"
+        paired_f  = "data/{sample}/{run}/bloom_filtered/{sample}_R1.trimmed.bloom_filtered.fq.gz",
+        unpaired_f = "data/{sample}/{run}/bloom_filtered/{sample}_U1.trimmed.bloom_filtered.fq.gz"
     output:
         "data/{sample}/{run}/metaphlan2/{sample}_metaphlan_output.tsv"
     params:
@@ -701,8 +800,8 @@ rule humann2_sample_pe:
     processing and naming, still will need to make a separate rule for PE. 
     """
     input:
-        paired_f  = "data/{sample}/{run}/host_filtered/{sample}_R1.trimmed.host_filtered.fq.gz",
-        unpaired_f = "data/{sample}/{run}/host_filtered/{sample}_U1.trimmed.host_filtered.fq.gz",
+        paired_f  = "data/{sample}/{run}/bloom_filtered/{sample}_R1.trimmed.bloom_filtered.fq.gz",
+        unpaired_f = "data/{sample}/{run}/bloom_filtered/{sample}_U1.trimmed.bloom_filtered.fq.gz",
         metaphlan_in = "data/combined_analysis/{run}/humann2/joined_taxonomic_profile_max.tsv"
     output:
         genefamilies = "data/{sample}/{run}/humann2/{sample}_genefamilies.biom",
