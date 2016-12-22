@@ -196,7 +196,17 @@ rule basic_qc:
                 "data/{sample}/{run}/host_filtered/{sample}_{end}.trimmed.host_filtered.fq.gz",
                 sample = SAMPLES_SE,
                 run = RUN,
-                end = "SE".split()),       
+                end = "SE".split()), 
+        expand( # filtered fastqs
+                "data/{sample}/{run}/host_filtered/{sample}_{end}.trimmed.bloom_filtered.fq.gz",
+                sample = SAMPLES_PE,
+                run = RUN,
+                end = "R1 R2 U1 U2".split()) +
+        expand( # filtered fastqs
+                "data/{sample}/{run}/host_filtered/{sample}_{end}.trimmed.bloom_filtered.fq.gz",
+                sample = SAMPLES_SE,
+                run = RUN,
+                end = "SE".split()),                      
         expand( # MultiQC for just this run
             "data/multiQC/{run}/multiqc_report.html",
             run = RUN
@@ -226,12 +236,12 @@ rule bloom_filter:
     """
     input:
         expand( # filtered fastqs
-                "data/{sample}/{run}/host_filtered/{sample}_{end}.trimmed.host_filtered.fq.gz",
+                "data/{sample}/{run}/host_filtered/{sample}_{end}.trimmed.bloom_filtered.fq.gz",
                 sample = SAMPLES_PE,
                 run = RUN,
                 end = "R1 R2 U1 U2".split()) +
         expand( # filtered fastqs
-                "data/{sample}/{run}/host_filtered/{sample}_{end}.trimmed.host_filtered.fq.gz",
+                "data/{sample}/{run}/host_filtered/{sample}_{end}.trimmed.bloom_filtered.fq.gz",
                 sample = SAMPLES_SE,
                 run = RUN,
                 end = "SE".split())
@@ -248,7 +258,7 @@ rule humann2:
     # params:
     #     norms = config['PARAMS']['HUMANN2']['NORMS']
     input:
-        expand( # host-filtered fastqs
+        expand( # host- and bloom-filtered fastqs
                 "data/{sample}/{run}/bloom_filtered/{sample}_{end}.trimmed.bloom_filtered.fq.gz",
                 sample = SAMPLES_PE,
                 run = RUN,
