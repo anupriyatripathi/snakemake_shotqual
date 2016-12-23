@@ -687,8 +687,8 @@ rule bloom_filter_pe:
                   scp {temp_dir}/{params.forward_fn}.gz {output.forward}
                   scp {temp_dir}/{params.reverse_fn}.gz {output.reverse} 
 
-                  bowtie2 -p {threads} -x {params.host_db} --very-sensitive -U {input.unpaired_1} --un-gz {temp_dir}/{params.unpaired_1_fn} -S /dev/null 2> {log.other}
-                  bowtie2 -p {threads} -x {params.host_db} --very-sensitive -U {input.unpaired_2} --un-gz {temp_dir}/{params.unpaired_2_fn} -S /dev/null 2> {log.other}
+                  bowtie2 -p {threads} -x {params.bloom_db} --very-sensitive -U {input.unpaired_1} --un-gz {temp_dir}/{params.unpaired_1_fn} -S /dev/null 2> {log.other}
+                  bowtie2 -p {threads} -x {params.bloom_db} --very-sensitive -U {input.unpaired_2} --un-gz {temp_dir}/{params.unpaired_2_fn} -S /dev/null 2> {log.other}
                   scp {temp_dir}/{params.unpaired_1_fn} {output.unpaired_1}
                   scp {temp_dir}/{params.unpaired_2_fn} {output.unpaired_2}
                   """)
